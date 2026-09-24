@@ -1,0 +1,51 @@
+{
+  "features": {
+    "categorical_cols": [
+      "P",
+      "C",
+      "G"
+    ],
+    "combinable_numerical_cols": [
+      "N",
+      "I",
+      "I3",
+      "J",
+      "Mass"
+    ],
+    "is_known_col_map": {
+      "N": "Nk",
+      "I": "Ik",
+      "I3": "I3k",
+      "J": "Jk",
+      "Mass": "Mk"
+    },
+    "quark_cols": [
+      "u",
+      "ubar",
+      "d",
+      "dbar",
+      "s",
+      "sbar",
+      "c",
+      "cbar",
+      "b",
+      "bbar"
+    ]
+  },
+  "model_params": {
+    "dim": 512,
+    "depth": 6,
+    "heads": 16,
+    "dim_head": 32,
+    "attn_dropout": 0.01,
+    "ff_dropout": 0.01
+  },
+  "categorical_cardinalities": [
+    3,
+    3,
+    3
+  ],
+  "mass_unit": "GeV",
+  "pion0_mass_gev": 0.134976828,
+  "n_scale": 0.1
+}

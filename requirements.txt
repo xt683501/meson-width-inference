@@ -1,0 +1,4 @@
+torch>=2.0,<3
+numpy>=1.24,<3
+einops>=0.7,<1
+hyper-connections==0.1.11

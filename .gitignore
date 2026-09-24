@@ -1,0 +1,8 @@
+# The >100 MB checkpoint is distributed separately as a release asset.
+weights/*.pth
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+predictions.csv
+*.tmp
