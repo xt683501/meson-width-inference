@@ -20,7 +20,7 @@ produce the released checkpoints.
 Data contract
 -------------
 The default CSV (``data/meson-train.csv``) holds exactly one row per training
-species (370 species, ``split=train`` only, no validation or inference data).
+species (370 species, ``split=train`` only; no rows from the other-particles table).
 Each row sits at the species' exact central mass, i.e.
 ``Mass == N * 0.134976828 / 0.1`` (the paper's deterministic-inference mass),
 with a positive finite ``width_mev`` label.  The columns are the model-ready

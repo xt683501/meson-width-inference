@@ -4,14 +4,14 @@ An FT-Transformer for meson total decay widths, accompanying [*Meson Properties 
 
 ## Weights and data
 
-Download the two checkpoints from the [v1.2.0 release](https://github.com/xt683501/meson-width-inference/releases/tag/v1.2.0) into `weights/`:
+Download the two checkpoints from the [v1.3.0 release](https://github.com/xt683501/meson-width-inference/releases/tag/v1.3.0) into `weights/`:
 
 | File | Description | SHA-256 |
 |---|---|---|
 | `paper-model.pth` | Checkpoint used for the paper's predictions | `164059cedd335ae7c525fde9e10af974bb01534b4680dccaca6429ac0e3e37d9` |
 | `revised-model.pth` | Later paper-derived checkpoint with lower error on the corrected training data | `a45b25a8d8d6b67fe54c279f5f5a0a827178915ee13e147f39b6cef653ec2275` |
 
-Check the downloads with `cd weights && sha256sum -c SHA256SUMS`. Model-ready data are in [`data/meson-train.csv`](data/meson-train.csv) (370 training mesons) and [`data/meson-validation.csv`](data/meson-validation.csv) (47 validation and alternate records). See the [data notes](data/README.md) for label types; more detailed measured properties are available from the [Particle Data Group](https://pdg.lbl.gov/).
+Check the downloads with `cd weights && sha256sum -c SHA256SUMS`. Model-ready data are in [`data/meson-train.csv`](data/meson-train.csv) (370 training mesons) and [`data/meson-other-particles.csv`](data/meson-other-particles.csv) (47 records outside the training table, including 12 alternate encodings). See the [data notes](data/README.md) for label types; more detailed measured properties are available from the [Particle Data Group](https://pdg.lbl.gov/).
 
 ## Predict a width
 

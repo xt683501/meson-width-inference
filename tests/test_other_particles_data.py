@@ -1,4 +1,4 @@
-"""Validate the published central-mass evaluation table without using it for training."""
+"""Check the published central-mass records outside the training table."""
 from __future__ import annotations
 
 import csv
@@ -11,9 +11,9 @@ from pathlib import Path
 from predict import ROOT, read_inputs
 
 
-class ValidationDataTest(unittest.TestCase):
+class OtherParticlesDataTest(unittest.TestCase):
     def test_splits_and_label_roles(self) -> None:
-        path = ROOT / "data/meson-validation.csv"
+        path = ROOT / "data/meson-other-particles.csv"
         with path.open(newline="", encoding="utf-8") as file:
             rows = list(csv.DictReader(file))
         self.assertEqual(len(rows), 47)
@@ -39,7 +39,7 @@ class ValidationDataTest(unittest.TestCase):
 
     def test_rows_are_model_ready(self) -> None:
         config = json.loads((ROOT / "model-config.json").read_text(encoding="utf-8"))
-        rows, tensors, _ = read_inputs(ROOT / "data/meson-validation.csv", config)
+        rows, tensors, _ = read_inputs(ROOT / "data/meson-other-particles.csv", config)
         self.assertEqual(len(rows), 47)
         self.assertEqual(tensors["Mass"].shape[0], 47)
 

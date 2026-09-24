@@ -6,8 +6,8 @@ Covers:
   * the data/meson-train.csv schema: 370 unique train species, one exact
     central-mass row each (Mass == N * 0.134976828 / 0.1), positive finite
     widths, model-ready columns per predict.read_inputs, split=train only;
-  * no evaluation leakage: train species are disjoint from the frozen
-    validation-species set (val1/val2/val3/vale) of the corrected workbook;
+  * training-table names are disjoint from the archived particles outside
+    that table (source split codes val1/val2/val3/vale);
   * a tiny deterministic CPU trainer smoke run with output protection
     (never overwrites existing files, never writes into weights/).
 
@@ -39,8 +39,9 @@ EXPECTED_HEADER = ["name", "P", "C", "G", "N", "I", "I3", "J", "Mass",
 
 # Frozen 2026-09-24 from 0902_500_train_corrected_v1.xlsx (SHA-256
 # 33dcc74619b1f70f913f084aac84d7d047c9e2e47b9eec237970bdc5f61882e6):
-# 8 val1 + 6 val2 + 21 val3 + 12 vale species (backtick names are vale aliases).
-EVAL_NAMES = (
+# 8 val1 + 6 val2 + 21 val3 + 12 vale records (source codes retained;
+# backtick names are alternate encodings).
+OTHER_PARTICLE_NAMES = (
     'Bbar_s2^*(5840)0',
     'D_1(2420)+',
     'D_2(2740)+',
@@ -150,7 +151,7 @@ class LossFormulaTests(unittest.TestCase):
 
 class DatasetSchemaTests(unittest.TestCase):
     """Contract of data/meson-train.csv: 370 unique train species, exact
-    central mass, positive widths, model-ready columns, no eval leakage."""
+    central mass, positive widths, model-ready columns, no other-particle rows."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -192,12 +193,12 @@ class DatasetSchemaTests(unittest.TestCase):
         for column, tensor in tensors.items():
             self.assertEqual(tensor.shape, (EXPECTED_TRAIN_SPECIES,), column)
 
-    def test_no_eval_leakage(self) -> None:
+    def test_no_other_particle_names_in_training_table(self) -> None:
         train_names = {row["name"] for row in self.rows}
-        overlap = train_names & set(EVAL_NAMES)
+        overlap = train_names & set(OTHER_PARTICLE_NAMES)
         self.assertEqual(overlap, set(),
-                         f"training CSV leaks evaluation species: {sorted(overlap)}")
-        self.assertEqual(len(EVAL_NAMES), 47)
+                         f"training CSV contains names outside its source split: {sorted(overlap)}")
+        self.assertEqual(len(OTHER_PARTICLE_NAMES), 47)
 
     def test_config_instantiates_model(self) -> None:
         config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
