@@ -4,7 +4,7 @@ An FT-Transformer for meson total decay widths, accompanying [*Meson Properties 
 
 ## Weights and data
 
-Download the two checkpoints from the [v1.0.0 release](https://github.com/xt683501/meson-width-inference/releases/tag/v1.0.0) into `weights/`:
+Download the two checkpoints from the [v1.1.0 release](https://github.com/xt683501/meson-width-inference/releases/tag/v1.1.0) into `weights/`:
 
 | File | Description | SHA-256 |
 |---|---|---|
