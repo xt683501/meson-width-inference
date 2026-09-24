@@ -9,7 +9,7 @@ Inference-only code for the FT-Transformer model in Xin Tong *et al.*, [*Chinese
 | `paper-model.pth` | Weight used for the paper's Table 1 predictions | `164059cedd335ae7c525fde9e10af974bb01534b4680dccaca6429ac0e3e37d9` |
 | `revised-model.pth` | v6: separate paper-derived fine-tune; lower error on the corrected training labels | `a45b25a8d8d6b67fe54c279f5f5a0a827178915ee13e147f39b6cef653ec2275` |
 
-The v6 weight is not the paper weight. It was fine-tuned from the paper-derived lineage using corrected training labels and two validation-particle width-interval constraints. Those two particles are therefore **not independent validation evidence** for v6. Its lower training error is **not** an improvement claim on validation or other particles. The two files are distributed as release assets rather than Git files because each exceeds GitHub's normal 100 MB file limit. Put downloaded assets in `weights/`; verify them with `cd weights && sha256sum -c SHA256SUMS`.
+The v6 weight is not the paper weight. It was fine-tuned from the paper-derived lineage using corrected training labels and two validation-particle width-interval constraints. Those two particles are therefore **not independent validation evidence** for v6. Its lower training error is **not** an improvement claim on validation or other particles. The two files are available on the [v1.0.0 release page](https://github.com/xt683501/meson-width-inference/releases/tag/v1.0.0) rather than in Git because each exceeds GitHub's normal 100 MB file limit. Download both assets into `weights/`; verify them with `cd weights && sha256sum -c SHA256SUMS`.
 
 ## Run
 
