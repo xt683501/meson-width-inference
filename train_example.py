@@ -6,10 +6,10 @@ This is a *pedagogical* implementation of the two-stage cross-scale protocol
 described in the paper (Xin Tong *et al.*, *Chinese Physics Letters* **43**,
 020201 (2026), arXiv:2509.17093, Eqs. 10-11):
 
-  * Phase 1 (first ``--phase1-epochs`` epochs): LogCosh loss on the log-width
-    target; the model natively outputs ``log(width)`` in MeV.
-  * Phase 2 (remaining epochs): mean squared relative error on the physical
-    MeV width, per species
+  * Phase 1: LogCosh loss on log-width. Monitor training log-width MAPE;
+    switch at the requested threshold, as in the original training loop.
+  * Phase 2: mean squared relative error on the physical MeV width, per species,
+    with the original code's 1e-14 MeV denominator stabilizer.
 
         e_i   = |predicted_i - reference_i| / reference_i     (paper Eq. 10)
         Loss  = mean(e_i^2)                                    (paper Eq. 11)
@@ -46,7 +46,7 @@ repository root:
 
     # full illustrative run on CPU (this is an example, not a benchmark)
     python train_example.py --output /tmp/example-weights.pth \
-        --epochs 300 --phase1-epochs 100 --lr 1e-4 --batch-size 64 --seed 48
+        --epochs 300 --switch-log-mape-pct 3.3 --lr 1e-4 --batch-size 64
 """
 from __future__ import annotations
 
@@ -77,8 +77,8 @@ EXPECTED_TRAIN_SPECIES = 370
 LOG2 = math.log(2.0)
 
 ILLUSTRATIVE_BANNER = (
-    "Two-stage example: LogCosh on log-width, then squared relative error "
-    "in MeV (paper Eqs. 10-11)."
+    "Two-stage cross-scale example. Phase losses and switching threshold are configurable; "
+    "this does not reproduce either released checkpoint."
 )
 
 
@@ -97,16 +97,35 @@ def phase1_loss(log_pred: torch.Tensor, log_true: torch.Tensor) -> torch.Tensor:
     return logcosh(log_pred - log_true).mean()
 
 
-def msre_mev_loss(log_pred: torch.Tensor, width_true: torch.Tensor) -> torch.Tensor:
+def msre_mev_loss(log_pred: torch.Tensor, width_true: torch.Tensor,
+                  epsilon: float = 1e-14) -> torch.Tensor:
     """Phase 2 (paper Eqs. 10/11): mean squared relative error in MeV.
 
-    ``e_i = |exp(log_pred_i) - w_i| / w_i`` and ``Loss = mean(e_i ** 2)``,
-    i.e. the squared RMS relative error (RMSRE^2) on the physical width.
-    ``width_true`` must be strictly positive (guaranteed by the data
-    contract); the denominator is the exact reference width per Eq. 10.
+    Follows the original MSPE_from_Log_Loss: ``exp(log_pred)`` converts back
+    to MeV and ``1e-14`` stabilizes the denominator. This is close to, but
+    not identical with, Eq. 11 for the narrowest widths.
     """
-    relative = (log_pred.exp() - width_true).abs() / width_true
+    relative = (log_pred.exp() - width_true) / (width_true + epsilon)
     return relative.square().mean()
+
+
+def log_mape_pct(log_pred: torch.Tensor, log_true: torch.Tensor) -> float:
+    """Original switch metric: MAPE of log-width, not physical-width MAPE."""
+    mask = log_true.abs() > 1e-8
+    if not bool(mask.any()):
+        return 0.0
+    return float(((log_pred[mask] - log_true[mask]).abs() /
+                  log_true[mask].abs()).mean() * 100.0)
+
+
+def configured_loss(name: str, log_pred: torch.Tensor, log_true: torch.Tensor,
+                    width_true: torch.Tensor) -> torch.Tensor:
+    """Select the phase loss by name, following the original config pattern."""
+    if name == "logcosh":
+        return phase1_loss(log_pred, log_true)
+    if name == "mspe":
+        return msre_mev_loss(log_pred, width_true)
+    raise ValueError(f"unknown phase loss: {name}")
 
 
 def build_model(config: dict) -> FTTransformer:
@@ -173,11 +192,11 @@ def validate_output_path(output: Path) -> Path:
     return out
 
 
-def _train_rmsre_pct(model: FTTransformer,
-                     tensors: dict[str, torch.Tensor],
-                     width_true: torch.Tensor,
-                     batch_size: int) -> float:
-    """Eq. 11 RMSRE (in %) on the physical MeV width, full deterministic pass."""
+def _train_metrics(model: FTTransformer,
+                   tensors: dict[str, torch.Tensor],
+                   width_true: torch.Tensor, log_true: torch.Tensor,
+                   batch_size: int) -> tuple[float, float]:
+    """Return (training log-MAPE %, physical-width RMSRE %) for all rows."""
     model.eval()
     with torch.inference_mode():
         parts = []
@@ -186,7 +205,7 @@ def _train_rmsre_pct(model: FTTransformer,
             parts.append(model(x=batch).reshape(-1))
         log_pred = torch.cat(parts)
         err = (log_pred.exp() - width_true).abs() / width_true
-        return float(math.sqrt(torch.mean(err.square()).item()) * 100.0)
+        return log_mape_pct(log_pred, log_true), float(math.sqrt(torch.mean(err.square()).item()) * 100.0)
 
 
 def train(data_path: Path = DEFAULT_DATA,
@@ -195,8 +214,12 @@ def train(data_path: Path = DEFAULT_DATA,
           *,
           init_weights: Path | None = None,
           epochs: int = 300,
-          phase1_epochs: int = 100,
+          phase1_epochs: int | None = None,
+          switch_log_mape_pct: float = 3.3,
+          phase1_loss_name: str = "logcosh",
+          phase2_loss_name: str = "mspe",
           lr: float = 1e-4,
+          weight_decay: float = 1e-3,
           batch_size: int = 64,
           seed: int = 48,
           device: str = "cpu",
@@ -215,11 +238,17 @@ def train(data_path: Path = DEFAULT_DATA,
     if smoke:
         device = "cpu"
         epochs = min(epochs, 2)
-        phase1_epochs = min(phase1_epochs, epochs - 1)
+        phase1_epochs = 1  # exercise both phases in the tiny smoke run
     if epochs < 1:
         raise ValueError("epochs must be >= 1")
-    if not 0 <= phase1_epochs < epochs:
+    if phase1_epochs is not None and not 0 <= phase1_epochs < epochs:
         raise ValueError("phase1_epochs must satisfy 0 <= phase1_epochs < epochs")
+    if not math.isfinite(switch_log_mape_pct) or switch_log_mape_pct <= 0:
+        raise ValueError("switch_log_mape_pct must be positive and finite")
+    if not math.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError("weight_decay must be nonnegative and finite")
+    if phase1_loss_name not in {"logcosh", "mspe"} or phase2_loss_name not in {"logcosh", "mspe"}:
+        raise ValueError("phase loss names must be logcosh or mspe")
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
     if not lr > 0.0:
@@ -248,21 +277,27 @@ def train(data_path: Path = DEFAULT_DATA,
     width_true = torch.tensor(widths, dtype=torch.float32, device=device)
     n = len(names)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.8, patience=20)
 
     print(ILLUSTRATIVE_BANNER)
-    print(f"training: n_species={n} epochs={epochs} phase1_epochs={phase1_epochs} "
-          f"lr={lr} batch_size={batch_size} seed={seed} device={device} smoke={smoke}")
+    print(f"training: n_species={n} epochs={epochs} switch_log_mape_pct={switch_log_mape_pct} "
+          f"phase1={phase1_loss_name} phase2={phase2_loss_name} "
+          f"phase1_max_epochs={phase1_epochs} lr={lr} weight_decay={weight_decay} "
+          f"batch_size={batch_size} seed={seed} device={device} smoke={smoke}")
 
     summary: dict = {
         "epochs_run": 0,
         "phase2_entered_at_epoch": None,
         "last_loss": None,
         "final_rmsre_pct": None,
+        "final_log_mape_pct": None,
         "output": str(out) if out is not None else None,
     }
+    phase2_active = phase1_epochs == 0
     for epoch in range(1, epochs + 1):
-        phase = 1 if epoch <= phase1_epochs else 2
+        phase = 2 if phase2_active else 1
         if phase == 2 and summary["phase2_entered_at_epoch"] is None:
             summary["phase2_entered_at_epoch"] = epoch
         model.train()
@@ -272,10 +307,8 @@ def train(data_path: Path = DEFAULT_DATA,
             idx = order[start:start + batch_size]
             batch = {k: v[idx].to(device) for k, v in tensors.items()}
             log_pred = model(x=batch).reshape(-1)
-            if phase == 1:
-                loss = phase1_loss(log_pred, log_true[idx])
-            else:
-                loss = msre_mev_loss(log_pred, width_true[idx])
+            loss_name = phase1_loss_name if phase == 1 else phase2_loss_name
+            loss = configured_loss(loss_name, log_pred, log_true[idx], width_true[idx])
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"non-finite loss at epoch {epoch}")
             optimizer.zero_grad(set_to_none=True)
@@ -283,12 +316,21 @@ def train(data_path: Path = DEFAULT_DATA,
             optimizer.step()
             total_loss += float(loss.detach()) * len(idx)
         summary["epochs_run"] = epoch
-        if epoch % log_every == 0 or epoch == epochs:
-            rmsre = _train_rmsre_pct(model, tensors, width_true, batch_size)
-            summary["last_loss"] = total_loss / n
-            summary["final_rmsre_pct"] = rmsre
-            print(f"epoch {epoch:4d} phase={phase} loss={total_loss / n:.6g} "
-                  f"train_rmsre={rmsre:.4f}%")
+        # The original loop checked the training log-MAPE after each epoch;
+        # a threshold crossing affects the following epoch, not this one.
+        log_mape, rmsre = _train_metrics(model, tensors, width_true, log_true, batch_size)
+        mean_loss = total_loss / n
+        summary.update(last_loss=mean_loss, final_rmsre_pct=rmsre,
+                       final_log_mape_pct=log_mape)
+        if epoch % log_every == 0 or epoch == epochs or (phase == 1 and log_mape < switch_log_mape_pct):
+            print(f"epoch {epoch:4d} phase={phase} loss={mean_loss:.6g} "
+                  f"train_log_mape={log_mape:.4f}% train_rmsre={rmsre:.4f}%")
+        if phase == 1 and (log_mape < switch_log_mape_pct or
+                           (phase1_epochs is not None and epoch >= phase1_epochs)):
+            phase2_active = True
+            scheduler.best = float("inf")
+            scheduler.num_bad_epochs = 0
+        scheduler.step(mean_loss)
     if out is not None:
         out.parent.mkdir(parents=True, exist_ok=True)
         torch.save({k: v.detach().cpu() for k, v in model.state_dict().items()}, out)
@@ -310,9 +352,14 @@ def main() -> None:
     parser.add_argument("--init", type=Path, default=None, dest="init_weights",
                         help="optional state dict to initialize from (opened read-only)")
     parser.add_argument("--epochs", type=int, default=300, help="total epochs (default: %(default)s)")
-    parser.add_argument("--phase1-epochs", type=int, default=100,
-                        help="epochs of phase 1 (LogCosh on log-width); must be < --epochs")
+    parser.add_argument("--phase1-epochs", type=int, default=None,
+                        help="optional maximum phase-1 epochs; normally switch by training log-MAPE")
+    parser.add_argument("--switch-log-mape-pct", type=float, default=3.3,
+                        help="switch to phase 2 after training log-width MAPE falls below this percent")
+    parser.add_argument("--phase1-loss", choices=("logcosh", "mspe"), default="logcosh")
+    parser.add_argument("--phase2-loss", choices=("logcosh", "mspe"), default="mspe")
     parser.add_argument("--lr", type=float, default=1e-4, help="AdamW learning rate (default: %(default)s)")
+    parser.add_argument("--weight-decay", type=float, default=1e-3)
     parser.add_argument("--batch-size", type=int, default=64,
                         help="species per batch (default: %(default)s)")
     parser.add_argument("--seed", type=int, default=48, help="determinism seed (default: %(default)s)")
@@ -329,7 +376,11 @@ def main() -> None:
         init_weights=args.init_weights,
         epochs=args.epochs,
         phase1_epochs=args.phase1_epochs,
+        switch_log_mape_pct=args.switch_log_mape_pct,
+        phase1_loss_name=args.phase1_loss,
+        phase2_loss_name=args.phase2_loss,
         lr=args.lr,
+        weight_decay=args.weight_decay,
         batch_size=args.batch_size,
         seed=args.seed,
         device=args.device,

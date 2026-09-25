@@ -27,7 +27,7 @@ import torch
 
 from predict import read_inputs
 import train_example
-from train_example import (ROOT, EXPECTED_TRAIN_SPECIES, build_model, logcosh,
+from train_example import (ROOT, EXPECTED_TRAIN_SPECIES, build_model, logcosh, log_mape_pct,
                            msre_mev_loss, phase1_loss, read_train_csv, train)
 
 CSV_PATH = ROOT / "data" / "meson-train.csv"
@@ -126,6 +126,11 @@ class LossFormulaTests(unittest.TestCase):
         # exact predictions -> zero loss
         self.assertAlmostEqual(msre_mev_loss(torch.log(width), width).item(), 0.0, places=12)
 
+    def test_log_mape_switch_metric_is_not_physical_mape(self) -> None:
+        actual_log = torch.tensor([2.0, -4.0, 0.0])
+        predicted_log = torch.tensor([2.2, -3.2, 9.0])
+        self.assertAlmostEqual(log_mape_pct(predicted_log, actual_log), 15.0, places=4)
+
     def test_msre_is_relative(self) -> None:
         # scaling both width and prediction leaves the relative error unchanged
         width = torch.tensor([1.0, 4.0])
@@ -221,7 +226,7 @@ class TrainerSmokeTests(unittest.TestCase):
         lines = CSV_PATH.read_text(encoding="utf-8").splitlines()
         path.write_text("\n".join(lines[: n_rows + 1]) + "\n", encoding="utf-8")
 
-    def _run(self, td: Path, *, epochs: int, phase1_epochs: int,
+    def _run(self, td: Path, *, epochs: int, phase1_epochs: int | None,
              output: Path | None = None, **kwargs) -> dict:
         cfg, data = td / "config.json", td / "mini.csv"
         self._tiny_config(cfg)
@@ -278,6 +283,38 @@ class TrainerSmokeTests(unittest.TestCase):
         # epochs 2-3 -> phase 2
         self.assertEqual(calls["p1"], 2)
         self.assertEqual(calls["p2"], 4)
+
+    def test_log_mape_threshold_switches_next_epoch(self) -> None:
+        real_metrics = train_example._train_metrics
+        observed = iter([(5.0, 10.0), (2.0, 5.0), (1.0, 3.0)])
+        train_example._train_metrics = lambda *args: next(observed)
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                summary = self._run(Path(td), epochs=3, phase1_epochs=None,
+                                    switch_log_mape_pct=3.3)
+        finally:
+            train_example._train_metrics = real_metrics
+        self.assertEqual(summary["phase2_entered_at_epoch"], 3)
+        self.assertEqual(summary["final_log_mape_pct"], 1.0)
+
+    def test_mspe_original_denominator_near_narrow_width(self) -> None:
+        # Original implementation adds 1e-14 MeV; this is deliberately
+        # distinct from exact Eq. 11 when the label is of that order.
+        label = torch.tensor([1e-14], dtype=torch.float64)
+        pred = torch.tensor([2e-14], dtype=torch.float64)
+        self.assertAlmostEqual(msre_mev_loss(pred.log(), label).item(), 0.25)
+
+    def test_configurable_reverse_phase_order(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            summary = self._run(Path(td), epochs=2, phase1_epochs=1,
+                                phase1_loss_name="mspe", phase2_loss_name="logcosh")
+        self.assertEqual(summary["phase2_entered_at_epoch"], 2)
+        self.assertTrue(math.isfinite(summary["last_loss"]))
+
+    def test_zero_first_phase_enters_second_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            summary = self._run(Path(td), epochs=1, phase1_epochs=0)
+        self.assertEqual(summary["phase2_entered_at_epoch"], 1)
 
     def test_init_weights_loads_strictly(self) -> None:
         with tempfile.TemporaryDirectory() as td:
